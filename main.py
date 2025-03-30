@@ -48,6 +48,9 @@ class TextCorrectionTool:
         self.images = []  # 存儲原始圖片
         self.image_refs = []  # 存儲 Tkinter PhotoImage 引用
         self.download_path = os.path.join(os.path.expanduser("~"), "Downloads")  # 預設下載路徑
+        
+        # 應用深色模式設定
+        self.apply_theme()
     
     def create_widgets(self):
         """創建所有UI元件"""
@@ -73,6 +76,7 @@ class TextCorrectionTool:
         settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="設定", menu=settings_menu)
         settings_menu.add_command(label="文字格式", command=self.open_text_settings)
+        settings_menu.add_command(label="深色模式", command=self.toggle_dark_mode)
         
         # 主框架，分為上下兩部分
         main_frame = tk.Frame(self.root)
@@ -121,6 +125,9 @@ class TextCorrectionTool:
         self.image_container = tk.Frame(self.image_canvas, bg="white")
         self.image_canvas.create_window((0, 0), window=self.image_container, anchor="nw")
         
+        # 綁定圖片容器的配置事件，以更新滾動區域
+        self.image_container.bind("<Configure>", self.on_image_container_configure)
+        
         # 按鈕框架
         button_frame = tk.Frame(self.image_frame, bg="white")
         button_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
@@ -133,10 +140,7 @@ class TextCorrectionTool:
         self.path_button = tk.Button(button_frame, text="選擇路徑", command=self.choose_download_path)
         self.path_button.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
         
-        # 綁定圖片容器的配置事件，以更新滾動區域
-        self.image_container.bind("<Configure>", self.on_image_container_configure)
-        
-        # 狀態列
+        # 狀態欄
         self.status_bar = tk.Label(self.root, text="就緒", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
     
@@ -969,7 +973,8 @@ class TextCorrectionTool:
         """
         default_settings = {
             "font_family": "新細明體",
-            "font_size": 12
+            "font_size": 12,
+            "dark_mode": False  # 預設為淺色模式
         }
         
         try:
@@ -1005,6 +1010,55 @@ class TextCorrectionTool:
             print(f"儲存設定時發生錯誤: {str(e)}")
             messagebox.showerror("錯誤", f"無法儲存設定: {str(e)}")
 
+    def toggle_dark_mode(self):
+        """切換深色模式"""
+        self.settings["dark_mode"] = not self.settings["dark_mode"]
+        self.save_settings()
+        self.apply_theme()
+        
+    def apply_theme(self):
+        """應用主題設定"""
+        if self.settings["dark_mode"]:
+            # 深色模式
+            bg_color = "#2b2b2b"
+            fg_color = "white"
+            text_bg = "#2b2b2b"
+            text_fg = "white"
+            button_bg = "#3c3f41"
+            button_fg = "white"
+            canvas_bg = "#2b2b2b"
+        else:
+            # 淺色模式
+            bg_color = "white"
+            fg_color = "black"
+            text_bg = "white"
+            text_fg = "black"
+            button_bg = "#f0f0f0"
+            button_fg = "black"
+            canvas_bg = "white"
+        
+        # 應用主題到主視窗
+        self.root.configure(bg=bg_color)
+        
+        # 應用主題到文字區域
+        self.text_area.configure(bg=text_bg, fg=text_fg)
+        
+        # 應用主題到圖片區域
+        self.image_frame.configure(bg=bg_color)
+        self.image_container.configure(bg=bg_color)
+        self.image_canvas.configure(bg=canvas_bg)
+        
+        # 應用主題到按鈕
+        for widget in self.image_frame.winfo_children():
+            if isinstance(widget, tk.Frame):
+                widget.configure(bg=bg_color)
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Button):
+                        child.configure(bg=button_bg, fg=button_fg)
+        
+        # 應用主題到狀態欄
+        self.status_bar.configure(bg=bg_color, fg=fg_color)
+    
     def adjust_indentation(self, event=None):
         """調整文字縮進，使換行後的文字對齊前一行的第一個字"""
         # 重置修改標誌，避免無限循環
