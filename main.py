@@ -2,7 +2,7 @@ import os
 import sys
 import json
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 import threading
 import docx2txt  # 用於讀取Word文檔
 import msoffcrypto  # 用於處理加密的Office文檔
@@ -80,6 +80,12 @@ class TextCorrectionTool:
                                wrap=tk.WORD,  # 啟用自動換行
                                yscrollcommand=y_scrollbar.set)
         self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # 設置縮進，使換行後的文字對齊前一行的第一個字
+        self.text_area.config(tabs=("1c", "2c", "3c", "4c"), tabstyle="wordprocessor")
+        
+        # 綁定事件，當文字變化時調整縮進
+        self.text_area.bind("<<Modified>>", self.adjust_indentation)
         
         # 設置滾動條的命令
         y_scrollbar.config(command=self.text_area.yview)
@@ -230,6 +236,9 @@ class TextCorrectionTool:
                 self.text_area.insert(tk.END, text)
                 self.status_bar.config(text=f"已載入檔案: {os.path.basename(file_path)}")
                 
+                # 調整縮進
+                self.adjust_indentation()
+                
                 # 自動校正文字
                 self.correct_text()
                 
@@ -338,6 +347,9 @@ class TextCorrectionTool:
                 self.text_area.insert(tk.END, text)
                 self.status_bar.config(text=f"已載入加密檔案: {os.path.basename(file_path)}")
                 
+                # 調整縮進
+                self.adjust_indentation()
+                
                 # 自動校正文字
                 self.correct_text()
             except Exception as e:
@@ -360,6 +372,9 @@ class TextCorrectionTool:
                     self.text_area.delete(1.0, tk.END)
                     self.text_area.insert(tk.END, text)
                     self.status_bar.config(text=f"已載入檔案: {os.path.basename(file_path)}")
+                
+                # 調整縮進
+                self.adjust_indentation()
                 
                 # 自動校正文字
                 self.correct_text()
@@ -689,6 +704,50 @@ class TextCorrectionTool:
         except Exception as e:
             print(f"儲存設定時發生錯誤: {str(e)}")
             messagebox.showerror("錯誤", f"無法儲存設定: {str(e)}")
+
+    def adjust_indentation(self, event=None):
+        """調整文字縮進，使換行後的文字對齊前一行的第一個字"""
+        # 重置修改標誌，避免無限循環
+        self.text_area.edit_modified(False)
+        
+        # 獲取所有文字
+        content = self.text_area.get("1.0", tk.END)
+        
+        # 如果內容為空，不做處理
+        if not content.strip():
+            return
+        
+        # 處理每個段落
+        lines = content.split('\n')
+        for i in range(len(lines)):
+            # 跳過空行
+            if not lines[i].strip():
+                continue
+                
+            # 獲取當前行第一個非空白字符的位置
+            first_char_pos = len(lines[i]) - len(lines[i].lstrip())
+            
+            # 如果不是第一行且前一行不為空，設置縮進
+            if i > 0 and lines[i-1].strip():
+                prev_first_char_pos = len(lines[i-1]) - len(lines[i-1].lstrip())
+                
+                # 如果當前行是前一行的換行部分（由自動換行產生）
+                # 這裡需要根據實際情況調整判斷邏輯
+                if first_char_pos == 0 and len(lines[i]) > 0:
+                    # 設置縮進標籤
+                    tag_name = f"indent_{i}"
+                    self.text_area.tag_configure(tag_name, lmargin1=prev_first_char_pos)
+                    
+                    # 應用標籤到當前行
+                    line_start = f"{i+1}.0"
+                    line_end = f"{i+1}.{len(lines[i])}"
+                    self.text_area.tag_add(tag_name, line_start, line_end)
+
+    def adjust_text_formatting(self, event=None):
+        """調整文字格式，包括縮進和對齊"""
+        # 調用原有的縮進方法
+        self.adjust_indentation(event)
+
 
 def main():
     """程式主入口點"""
