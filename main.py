@@ -13,6 +13,9 @@ import tempfile
 from docx import Document  # 用於更精確地讀取Word文檔格式
 from PIL import Image, ImageTk
 from PIL import Image
+import datetime
+import traceback
+import logging
 
 class TextCorrectionTool:
     """文字校正工具主類別"""
@@ -26,6 +29,9 @@ class TextCorrectionTool:
         self.root.title("文字校正工具")
         self.root.geometry("900x600")  # 設定視窗大小為900x600
         self.root.resizable(False, False)  # 禁止調整視窗大小
+        
+        # 設定錯誤日誌
+        self.setup_error_logging()
         
         # 載入詞彙保護表
         self.protected_words = self.load_protected_words()
@@ -52,6 +58,42 @@ class TextCorrectionTool:
         # 應用深色模式設定
         self.apply_theme()
     
+    def setup_error_logging(self):
+        """設定錯誤日誌記錄"""
+        # 確保日誌目錄存在
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        # 設定日誌檔案名稱（包含日期）
+        log_file = os.path.join(log_dir, f"error_log_{datetime.datetime.now().strftime('%Y%m%d')}.log")
+        
+        # 配置日誌記錄器
+        logging.basicConfig(
+            filename=log_file,
+            level=logging.ERROR,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        # 設定未捕獲異常的處理器
+        def handle_exception(exc_type, exc_value, exc_traceback):
+            """處理未捕獲的異常"""
+            if issubclass(exc_type, KeyboardInterrupt):
+                # 正常退出程式的情況，不記錄
+                sys.__excepthook__(exc_type, exc_value, exc_traceback)
+                return
+                
+            # 記錄詳細的錯誤信息
+            error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+            logging.error(f"未捕獲的異常:\n{error_msg}")
+            
+            # 顯示錯誤訊息給使用者
+            messagebox.showerror("程式錯誤", f"發生嚴重錯誤，程式可能需要重新啟動。\n錯誤已記錄到日誌檔案中。\n\n錯誤類型: {exc_type.__name__}\n錯誤訊息: {str(exc_value)}")
+        
+        # 設定全局異常處理器
+        sys.excepthook = handle_exception
+    
     def create_widgets(self):
         """創建所有UI元件"""
         # 選單列
@@ -77,6 +119,11 @@ class TextCorrectionTool:
         menubar.add_cascade(label="設定", menu=settings_menu)
         settings_menu.add_command(label="文字格式", command=self.open_text_settings)
         settings_menu.add_command(label="深色模式", command=self.toggle_dark_mode)
+        
+        # 檢視選單
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="檢視", menu=view_menu)
+        view_menu.add_command(label="錯誤日誌", command=self.view_error_logs)
         
         # 主框架，分為上下兩部分
         main_frame = tk.Frame(self.root)
@@ -1186,7 +1233,129 @@ class TextCorrectionTool:
         # 等待視窗關閉
         password_window.wait_window()
         return password
-
+    
+    def log_error(self, error_type, error_message, details=None):
+        """記錄錯誤到日誌檔案
+        
+        參數:
+            error_type: 錯誤類型
+            error_message: 錯誤訊息
+            details: 詳細錯誤信息（可選）
+        """
+        try:
+            error_log = f"錯誤類型: {error_type}\n錯誤訊息: {error_message}"
+            if details:
+                error_log += f"\n詳細信息: {details}"
+                
+            # 記錄到日誌檔案
+            logging.error(error_log)
+            
+            # 顯示錯誤訊息給使用者
+            messagebox.showerror("錯誤", f"{error_message}\n\n錯誤已記錄到日誌檔案中。")
+        except Exception as e:
+            # 如果記錄錯誤時發生錯誤，直接顯示訊息
+            messagebox.showerror("錯誤", f"無法記錄錯誤: {str(e)}\n原始錯誤: {error_message}")
+    
+    def view_error_logs(self):
+        """檢視錯誤日誌"""
+        # 創建錯誤日誌視窗
+        log_window = tk.Toplevel(self.root)
+        log_window.title("錯誤日誌檢視")
+        log_window.geometry("800x500")
+        log_window.transient(self.root)  # 設為主視窗的子視窗
+        log_window.grab_set()  # 模態視窗
+        
+        # 創建框架
+        frame = tk.Frame(log_window, padx=10, pady=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 日誌檔案列表
+        tk.Label(frame, text="選擇日誌檔案:").pack(anchor=tk.W, pady=(0, 5))
+        
+        # 獲取日誌檔案列表
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        log_files = [f for f in os.listdir(log_dir) if f.startswith("error_log_") and f.endswith(".log")]
+        log_files.sort(reverse=True)  # 最新的日誌檔案排在前面
+        
+        if not log_files:
+            tk.Label(frame, text="沒有找到錯誤日誌檔案。").pack(pady=20)
+            tk.Button(frame, text="關閉", command=log_window.destroy).pack(pady=10)
+            return
+            
+        # 日誌檔案下拉選單
+        selected_log = tk.StringVar(value=log_files[0] if log_files else "")
+        log_combo = ttk.Combobox(frame, textvariable=selected_log, values=log_files, width=40, state="readonly")
+        log_combo.pack(anchor=tk.W, pady=(0, 10))
+        
+        # 日誌內容顯示區域
+        tk.Label(frame, text="日誌內容:").pack(anchor=tk.W, pady=(0, 5))
+        
+        # 添加滾動條
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 日誌內容文字區域
+        log_text = tk.Text(frame, wrap=tk.WORD, yscrollcommand=scrollbar.set)
+        log_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        scrollbar.config(command=log_text.yview)
+        
+        # 更新日誌內容的函數
+        def update_log_content(*args):
+            log_text.delete(1.0, tk.END)  # 清空文字區域
+            selected_file = selected_log.get()
+            
+            if not selected_file:
+                return
+                
+            try:
+                with open(os.path.join(log_dir, selected_file), "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if content:
+                        log_text.insert(tk.END, content)
+                    else:
+                        log_text.insert(tk.END, "日誌檔案為空。")
+            except Exception as e:
+                log_text.insert(tk.END, f"無法讀取日誌檔案: {str(e)}")
+        
+        # 綁定選擇事件
+        log_combo.bind("<<ComboboxSelected>>", update_log_content)
+        
+        # 按鈕區域
+        button_frame = tk.Frame(frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        # 刪除日誌按鈕
+        def delete_log():
+            selected_file = selected_log.get()
+            if not selected_file:
+                return
+                
+            if messagebox.askyesno("確認刪除", f"確定要刪除日誌檔案 {selected_file} 嗎？"):
+                try:
+                    os.remove(os.path.join(log_dir, selected_file))
+                    # 更新日誌檔案列表
+                    log_files = [f for f in os.listdir(log_dir) if f.startswith("error_log_") and f.endswith(".log")]
+                    log_files.sort(reverse=True)
+                    log_combo.config(values=log_files)
+                    
+                    if log_files:
+                        selected_log.set(log_files[0])
+                        update_log_content()
+                    else:
+                        selected_log.set("")
+                        log_text.delete(1.0, tk.END)
+                        log_text.insert(tk.END, "沒有找到錯誤日誌檔案。")
+                except Exception as e:
+                    messagebox.showerror("錯誤", f"無法刪除日誌檔案: {str(e)}")
+        
+        tk.Button(button_frame, text="刪除日誌", command=delete_log).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(button_frame, text="關閉", command=log_window.destroy).pack(side=tk.RIGHT)
+        
+        # 初始顯示第一個日誌檔案的內容
+        update_log_content()
 
 def main():
     """程式主入口點"""
