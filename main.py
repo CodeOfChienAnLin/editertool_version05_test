@@ -74,13 +74,13 @@ class TextCorrectionTool:
         menubar.add_cascade(label="設定", menu=settings_menu)
         settings_menu.add_command(label="文字格式", command=self.open_text_settings)
         
-        # 主框架，分為左右兩部分
+        # 主框架，分為上下兩部分
         main_frame = tk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # 文字處理區域框架 (700x500)
-        text_frame = tk.Frame(main_frame, width=700, height=500)
-        text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # 文字處理區域框架 (900x450)
+        text_frame = tk.Frame(main_frame, width=900, height=450)
+        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
         text_frame.pack_propagate(False)  # 防止框架被內容撐開
         
         # 添加垂直滾動條
@@ -103,9 +103,9 @@ class TextCorrectionTool:
         # 設置滾動條的命令
         y_scrollbar.config(command=self.text_area.yview)
         
-        # 圖片顯示區域框架 (180x500)
-        self.image_frame = tk.Frame(main_frame, width=180, height=500, bg="white")
-        self.image_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, pady=5)
+        # 圖片顯示區域框架 (900x120)
+        self.image_frame = tk.Frame(main_frame, width=900, height=120, bg="white")
+        self.image_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
         self.image_frame.pack_propagate(False)  # 防止框架被內容撐開
         
         # 圖片顯示區域的滾動畫布
@@ -123,7 +123,7 @@ class TextCorrectionTool:
         
         # 按鈕框架
         button_frame = tk.Frame(self.image_frame, bg="white")
-        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+        button_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
         
         # 下載圖片按鈕
         self.download_button = tk.Button(button_frame, text="下載圖片", command=self.download_images)
@@ -527,14 +527,14 @@ class TextCorrectionTool:
             image: PIL Image 對象
             index: 圖片索引
         """
-        # 計算縮放後的圖片大小，最大寬度為 160 像素
-        max_width = 160
+        # 計算縮放後的圖片大小，最大高度為 100 像素
+        max_height = 100
         width, height = image.size
         
-        if width > max_width:
-            ratio = max_width / width
-            new_width = max_width
-            new_height = int(height * ratio)
+        if height > max_height:
+            ratio = max_height / height
+            new_height = max_height
+            new_width = int(width * ratio)
         else:
             new_width = width
             new_height = height
@@ -550,7 +550,7 @@ class TextCorrectionTool:
         
         # 創建標籤來顯示圖片
         image_label = tk.Label(self.image_container, image=tk_image, bg="white")
-        image_label.grid(row=index, column=0, padx=5, pady=5, sticky="w")
+        image_label.grid(row=0, column=index, padx=5, pady=5, sticky="w")
         
         # 綁定點擊事件，以便放大查看
         image_label.bind("<Button-1>", lambda event, img=image, idx=index: self.show_full_image(img, idx))
