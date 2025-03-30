@@ -11,6 +11,8 @@ from io import BytesIO
 import opencc  # 用於中文文字轉換和校正
 import tempfile
 from docx import Document  # 用於更精確地讀取Word文檔格式
+from PIL import Image, ImageTk
+from PIL import Image
 
 class TextCorrectionTool:
     """文字校正工具主類別"""
@@ -41,6 +43,11 @@ class TextCorrectionTool:
         
         self.create_widgets()  # 創建UI元件
         self.setup_drag_drop()  # 設置拖放功能
+        
+        # 圖片相關變數
+        self.images = []  # 存儲原始圖片
+        self.image_refs = []  # 存儲 Tkinter PhotoImage 引用
+        self.download_path = os.path.join(os.path.expanduser("~"), "Downloads")  # 預設下載路徑
     
     def create_widgets(self):
         """創建所有UI元件"""
@@ -67,9 +74,14 @@ class TextCorrectionTool:
         menubar.add_cascade(label="設定", menu=settings_menu)
         settings_menu.add_command(label="文字格式", command=self.open_text_settings)
         
+        # 主框架，分為左右兩部分
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
         # 文字處理區域框架 (700x500)
-        text_frame = tk.Frame(self.root, width=700, height=500)
-        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_frame = tk.Frame(main_frame, width=700, height=500)
+        text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        text_frame.pack_propagate(False)  # 防止框架被內容撐開
         
         # 添加垂直滾動條
         y_scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL)
@@ -91,17 +103,46 @@ class TextCorrectionTool:
         # 設置滾動條的命令
         y_scrollbar.config(command=self.text_area.yview)
         
-        # 圖片顯示區域 (900x100)
-        image_frame = tk.Frame(self.root, width=900, height=100, bg="lightgrey")
-        image_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        # 圖片顯示區域框架 (180x500)
+        self.image_frame = tk.Frame(main_frame, width=180, height=500, bg="white")
+        self.image_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, pady=5)
+        self.image_frame.pack_propagate(False)  # 防止框架被內容撐開
         
-        # 添加標籤到圖片區域
-        self.image_label = tk.Label(image_frame, text="圖片顯示區域", bg="lightgrey")
-        self.image_label.pack(fill=tk.BOTH, expand=True)
+        # 圖片顯示區域的滾動畫布
+        self.image_canvas = tk.Canvas(self.image_frame, bg="white")
+        self.image_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # 圖片區域的垂直滾動條
+        image_scrollbar = tk.Scrollbar(self.image_frame, orient=tk.VERTICAL, command=self.image_canvas.yview)
+        image_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.image_canvas.configure(yscrollcommand=image_scrollbar.set)
+        
+        # 創建一個框架來放置圖片
+        self.image_container = tk.Frame(self.image_canvas, bg="white")
+        self.image_canvas.create_window((0, 0), window=self.image_container, anchor="nw")
+        
+        # 按鈕框架
+        button_frame = tk.Frame(self.image_frame, bg="white")
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+        
+        # 下載圖片按鈕
+        self.download_button = tk.Button(button_frame, text="下載圖片", command=self.download_images)
+        self.download_button.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
+        
+        # 選擇路徑按鈕
+        self.path_button = tk.Button(button_frame, text="選擇路徑", command=self.choose_download_path)
+        self.path_button.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
+        
+        # 綁定圖片容器的配置事件，以更新滾動區域
+        self.image_container.bind("<Configure>", self.on_image_container_configure)
         
         # 狀態列
         self.status_bar = tk.Label(self.root, text="就緒", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+    
+    def on_image_container_configure(self, event):
+        """當圖片容器大小變化時，更新畫布的滾動區域"""
+        self.image_canvas.configure(scrollregion=self.image_canvas.bbox("all"))
     
     def setup_drag_drop(self):
         """設置拖放功能"""
@@ -308,93 +349,59 @@ class TextCorrectionTool:
         參數:
             file_path: Word檔案路徑
             password: 檔案密碼（如果有的話）
-        
+            
         回傳:
             檔案內容
         """
-        try:
-            # 檢查檔案是否存在
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"找不到檔案: {file_path}")
-            
-            # 檢查檔案是否為Word檔案
-            if not file_path.lower().endswith(('.doc', '.docx')):
-                raise ValueError(f"不支援的檔案格式: {file_path}")
-            
-            # 更新狀態欄
-            self.status_bar.config(text=f"正在處理檔案: {os.path.basename(file_path)}")
-            
-            # 如果有密碼，嘗試解密
-            if password:
-                try:
-                    with open(file_path, 'rb') as encrypted_file:
-                        # 使用 msoffcrypto 解密
-                        office_file = msoffcrypto.OfficeFile(encrypted_file)
-                        
-                        # 檢查文件是否加密
-                        if not office_file.is_encrypted():
-                            print("文件未加密，無需解密")
-                            # 如果文件未加密，直接處理
-                            return self._process_unencrypted_file(file_path)
-                        
-                        # 解密文件到內存
-                        decrypted_content = BytesIO()
-                        try:
-                            office_file.load_key(password=password)
-                            office_file.decrypt(decrypted_content)
-                        except Exception as e:
-                            print(f"解密失敗: {str(e)}")
-                            raise ValueError(f"解密失敗，密碼可能不正確: {str(e)}")
-                        
-                        # 重置指針到開始位置
-                        decrypted_content.seek(0)
-                        
-                        # 嘗試使用 python-docx 解析解密後的內容
-                        try:
-                            doc = Document(decrypted_content)
-                            text = self._extract_text_from_document(doc)
-                            return text
-                        except Exception as docx_e:
-                            print(f"使用 python-docx 解析失敗: {str(docx_e)}")
-                            
-                            # 如果 python-docx 失敗，嘗試使用臨時文件和 docx2txt
-                            try:
-                                # 創建臨時文件
-                                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-                                temp_file.close()
-                                
-                                # 將解密內容寫入臨時文件
-                                decrypted_content.seek(0)
-                                with open(temp_file.name, 'wb') as f:
-                                    f.write(decrypted_content.read())
-                                
-                                # 使用 docx2txt 處理
-                                try:
-                                    text = docx2txt.process(temp_file.name)
-                                    return text
-                                finally:
-                                    # 刪除臨時文件
-                                    if os.path.exists(temp_file.name):
-                                        os.unlink(temp_file.name)
-                            except Exception as temp_e:
-                                print(f"使用臨時文件處理失敗: {str(temp_e)}")
-                                raise ValueError(f"無法解析解密後的文件: {str(temp_e)}")
-                except Exception as e:
-                    print(f"處理加密文件時發生錯誤: {str(e)}")
-                    raise ValueError(f"處理加密文件時發生錯誤: {str(e)}")
-            else:
-                # 處理未加密文件
-                return self._process_unencrypted_file(file_path)
+        # 檢查檔案是否存在
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"找不到檔案: {file_path}")
+        
+        # 清空之前的圖片
+        self.clear_images()
+        
+        # 如果提供了密碼，嘗試解密檔案
+        if password:
+            try:
+                # 創建一個臨時檔案來存儲解密後的內容
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_file:
+                    temp_path = temp_file.name
                 
-        except Exception as e:
-            print(f"處理檔案時發生錯誤: {str(e)}")
-            self.status_bar.config(text=f"處理檔案時發生錯誤: {str(e)}")
+                # 打開加密檔案
+                with open(file_path, 'rb') as f:
+                    file_bytes = f.read()
+                
+                # 創建一個 BytesIO 對象
+                file_stream = BytesIO(file_bytes)
+                
+                # 使用 msoffcrypto 解密
+                ms_file = msoffcrypto.OfficeFile(file_stream)
+                ms_file.load_key(password=password)
+                
+                with open(temp_path, 'wb') as f:
+                    ms_file.decrypt(f)
+                
+                # 處理解密後的檔案
+                text = self._process_unencrypted_file(temp_path)
+                
+                # 提取圖片
+                self.extract_images_from_docx(temp_path)
+                
+                # 刪除臨時檔案
+                os.unlink(temp_path)
+                
+                return text
+            except Exception as e:
+                # 如果解密失敗，拋出異常
+                raise Exception(f"解密失敗: {str(e)}")
+        else:
+            # 處理未加密的檔案
+            text = self._process_unencrypted_file(file_path)
             
-            # 檢查是否為加密錯誤
-            if password is None and self._is_password_error(str(e)):
-                raise Exception(f"檔案可能有密碼保護: {str(e)}")
+            # 提取圖片
+            self.extract_images_from_docx(file_path)
             
-            raise e
+            return text
     
     def _process_unencrypted_file(self, file_path):
         """處理未加密的Word檔案
@@ -474,90 +481,180 @@ class TextCorrectionTool:
         # 使用兩個換行符連接段落，保留格式
         return '\n\n'.join(paragraphs)
     
-    def handle_password_protected_file(self, file_path):
-        """處理有密碼保護的Word檔案
+    def extract_images_from_docx(self, file_path):
+        """從Word文件中提取圖片
         
         參數:
-            file_path: 加密Word檔案的路徑
+            file_path: Word檔案路徑
         """
-        # 處理有密碼保護的檔案
-        password = self.ask_password()
-        if password:
-            try:
-                # 使用密碼解密檔案
-                text = self.process_word_file(file_path, password)
-                self.text_area.delete(1.0, tk.END)
-                self.text_area.insert(tk.END, text)
-                self.status_bar.config(text=f"已載入加密檔案: {os.path.basename(file_path)}")
-                
-                # 調整縮進
-                self.adjust_indentation()
-                
-                # 自動校正文字
-                self.correct_text()
-            except Exception as e:
-                messagebox.showerror("錯誤", f"解密失敗，密碼可能不正確: {str(e)}")
-                self.status_bar.config(text=f"解密失敗: {os.path.basename(file_path)}")
+        try:
+            # 使用 python-docx 打開文件
+            doc = Document(file_path)
+            
+            # 提取文檔中的所有圖片
+            image_index = 0
+            for rel in doc.part.rels.values():
+                if "image" in rel.target_ref:
+                    try:
+                        # 獲取圖片數據
+                        image_data = rel.target_part.blob
+                        
+                        # 使用 PIL 處理圖片
+                        image = Image.open(BytesIO(image_data))
+                        
+                        # 保存圖片到列表中
+                        self.images.append(image)
+                        
+                        # 顯示圖片
+                        self.display_image(image, image_index)
+                        
+                        image_index += 1
+                    except Exception as e:
+                        print(f"提取圖片時出錯: {str(e)}")
+            
+            # 更新狀態欄
+            if image_index > 0:
+                self.status_bar.config(text=f"已提取 {image_index} 張圖片")
+            
+        except Exception as e:
+            print(f"提取圖片時出錯: {str(e)}")
+            messagebox.showwarning("警告", f"提取圖片時出錯: {str(e)}")
     
-    def ask_password(self):
-        """顯示密碼輸入對話框
+    def display_image(self, image, index):
+        """在圖片區域顯示圖片
         
-        回傳:
-            使用者輸入的密碼
+        參數:
+            image: PIL Image 對象
+            index: 圖片索引
         """
-        # 創建密碼輸入對話框
-        password_window = tk.Toplevel(self.root)
-        password_window.title("密碼保護")
-        password_window.geometry("300x150")
-        password_window.resizable(False, False)
+        # 計算縮放後的圖片大小，最大寬度為 160 像素
+        max_width = 160
+        width, height = image.size
         
-        # 設置模態對話框
-        password_window.transient(self.root)
-        password_window.grab_set()
+        if width > max_width:
+            ratio = max_width / width
+            new_width = max_width
+            new_height = int(height * ratio)
+        else:
+            new_width = width
+            new_height = height
+        
+        # 縮放圖片
+        resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+        
+        # 轉換為 Tkinter 可用的格式
+        tk_image = ImageTk.PhotoImage(resized_image)
+        
+        # 保存引用，防止垃圾回收
+        self.image_refs.append(tk_image)
+        
+        # 創建標籤來顯示圖片
+        image_label = tk.Label(self.image_container, image=tk_image, bg="white")
+        image_label.grid(row=index, column=0, padx=5, pady=5, sticky="w")
+        
+        # 綁定點擊事件，以便放大查看
+        image_label.bind("<Button-1>", lambda event, img=image, idx=index: self.show_full_image(img, idx))
+    
+    def show_full_image(self, image, index):
+        """顯示原始大小的圖片
+        
+        參數:
+            image: PIL Image 對象
+            index: 圖片索引
+        """
+        # 創建新視窗
+        image_window = tk.Toplevel(self.root)
+        image_window.title(f"圖片 {index + 1}")
+        
+        # 獲取圖片原始大小
+        width, height = image.size
+        
+        # 限制最大顯示尺寸
+        max_width = 800
+        max_height = 600
+        
+        if width > max_width or height > max_height:
+            # 計算縮放比例
+            width_ratio = max_width / width if width > max_width else 1
+            height_ratio = max_height / height if height > max_height else 1
+            ratio = min(width_ratio, height_ratio)
+            
+            # 縮放圖片
+            new_width = int(width * ratio)
+            new_height = int(height * ratio)
+            display_image = image.resize((new_width, new_height), Image.LANCZOS)
+        else:
+            display_image = image
+            new_width = width
+            new_height = height
+        
+        # 設置視窗大小
+        window_width = new_width + 20
+        window_height = new_height + 20
         
         # 居中顯示
-        window_width = 300
-        window_height = 150
-        screen_width = password_window.winfo_screenwidth()
-        screen_height = password_window.winfo_screenheight()
+        screen_width = image_window.winfo_screenwidth()
+        screen_height = image_window.winfo_screenheight()
         x = (screen_width - window_width) // 2
         y = (screen_height - window_height) // 2
-        password_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        image_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
         
-        # 添加說明標籤
-        tk.Label(password_window, text="該檔案有密碼保護，請輸入密碼:", font=("Arial", 10)).pack(pady=10)
+        # 轉換為 Tkinter 可用的格式
+        tk_image = ImageTk.PhotoImage(display_image)
         
-        # 密碼輸入框
-        password_entry = tk.Entry(password_window, show="*", width=25)
-        password_entry.pack(pady=5)
-        password_entry.focus_set()  # 設置焦點
+        # 創建標籤來顯示圖片
+        image_label = tk.Label(image_window, image=tk_image)
+        image_label.image = tk_image  # 保存引用
+        image_label.pack(padx=10, pady=10)
         
-        password = None
+        # 添加關閉按鈕
+        close_button = tk.Button(image_window, text="關閉", command=image_window.destroy)
+        close_button.pack(pady=5)
+    
+    def clear_images(self):
+        """清空圖片區域"""
+        # 清空圖片列表
+        self.images = []
+        self.image_refs = []
         
-        # 確定按鈕回調函數
-        def on_ok():
-            nonlocal password
-            password = password_entry.get()
-            password_window.destroy()
+        # 清空圖片容器
+        for widget in self.image_container.winfo_children():
+            widget.destroy()
+    
+    def download_images(self):
+        """下載所有圖片到指定路徑"""
+        if not self.images:
+            messagebox.showinfo("提示", "沒有可下載的圖片")
+            return
         
-        # 取消按鈕回調函數
-        def on_cancel():
-            password_window.destroy()
-        
-        # 按鈕區域
-        button_frame = tk.Frame(password_window)
-        button_frame.pack(pady=10)
-        
-        tk.Button(button_frame, text="確定", command=on_ok, width=10).pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="取消", command=on_cancel, width=10).pack(side=tk.LEFT, padx=5)
-        
-        # 綁定回車鍵
-        password_window.bind("<Return>", lambda event: on_ok())
-        password_window.bind("<Escape>", lambda event: on_cancel())
-        
-        # 等待視窗關閉
-        password_window.wait_window()
-        return password
+        try:
+            # 確保下載路徑存在
+            os.makedirs(self.download_path, exist_ok=True)
+            
+            # 下載所有圖片
+            for i, image in enumerate(self.images):
+                # 生成檔案名稱
+                file_name = f"image_{i + 1}.png"
+                file_path = os.path.join(self.download_path, file_name)
+                
+                # 保存圖片
+                image.save(file_path)
+            
+            # 更新狀態欄
+            self.status_bar.config(text=f"已下載 {len(self.images)} 張圖片到 {self.download_path}")
+            
+            # 顯示成功訊息
+            messagebox.showinfo("成功", f"已下載 {len(self.images)} 張圖片到:\n{self.download_path}")
+            
+        except Exception as e:
+            messagebox.showerror("錯誤", f"下載圖片時出錯: {str(e)}")
+    
+    def choose_download_path(self):
+        """選擇圖片下載路徑"""
+        path = filedialog.askdirectory(title="選擇圖片下載路徑")
+        if path:
+            self.download_path = path
+            self.status_bar.config(text=f"已設置下載路徑: {path}")
     
     def open_file(self):
         """開啟檔案對話框"""
@@ -950,6 +1047,91 @@ class TextCorrectionTool:
         """調整文字格式，包括縮進和對齊"""
         # 調用原有的縮進方法
         self.adjust_indentation(event)
+
+    def handle_password_protected_file(self, file_path):
+        """處理有密碼保護的Word檔案
+        
+        參數:
+            file_path: 加密Word檔案的路徑
+        """
+        # 處理有密碼保護的檔案
+        password = self.ask_password()
+        if password:
+            try:
+                # 使用密碼解密檔案
+                text = self.process_word_file(file_path, password)
+                self.text_area.delete(1.0, tk.END)
+                self.text_area.insert(tk.END, text)
+                self.status_bar.config(text=f"已載入加密檔案: {os.path.basename(file_path)}")
+                
+                # 調整縮進
+                self.adjust_indentation()
+                
+                # 自動校正文字
+                self.correct_text()
+            except Exception as e:
+                messagebox.showerror("錯誤", f"解密失敗，密碼可能不正確: {str(e)}")
+                self.status_bar.config(text=f"解密失敗: {os.path.basename(file_path)}")
+
+    def ask_password(self):
+        """顯示密碼輸入對話框
+        
+        回傳:
+            使用者輸入的密碼
+        """
+        # 創建密碼輸入對話框
+        password_window = tk.Toplevel(self.root)
+        password_window.title("密碼保護")
+        password_window.geometry("300x150")
+        password_window.resizable(False, False)
+        
+        # 設置模態對話框
+        password_window.transient(self.root)
+        password_window.grab_set()
+        
+        # 居中顯示
+        window_width = 300
+        window_height = 150
+        screen_width = password_window.winfo_screenwidth()
+        screen_height = password_window.winfo_screenheight()
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        password_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        
+        # 添加說明標籤
+        tk.Label(password_window, text="該檔案有密碼保護，請輸入密碼:", font=("Arial", 10)).pack(pady=10)
+        
+        # 密碼輸入框
+        password_entry = tk.Entry(password_window, show="*", width=25)
+        password_entry.pack(pady=5)
+        password_entry.focus_set()  # 設置焦點
+        
+        password = None
+        
+        # 確定按鈕回調函數
+        def on_ok():
+            nonlocal password
+            password = password_entry.get()
+            password_window.destroy()
+        
+        # 取消按鈕回調函數
+        def on_cancel():
+            password_window.destroy()
+        
+        # 按鈕區域
+        button_frame = tk.Frame(password_window)
+        button_frame.pack(pady=10)
+        
+        tk.Button(button_frame, text="確定", command=on_ok, width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="取消", command=on_cancel, width=10).pack(side=tk.LEFT, padx=5)
+        
+        # 綁定回車鍵
+        password_window.bind("<Return>", lambda event: on_ok())
+        password_window.bind("<Escape>", lambda event: on_cancel())
+        
+        # 等待視窗關閉
+        password_window.wait_window()
+        return password
 
 
 def main():
