@@ -1,0 +1,4 @@
+opencc-python-reimplemented==0.1.7
+docx2txt==0.8
+msoffcrypto-tool==5.0.0
+Pillow==9.4.0
