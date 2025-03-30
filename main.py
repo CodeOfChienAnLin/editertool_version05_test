@@ -7,6 +7,7 @@ import threading
 import docx2txt  # 用於讀取Word文檔
 import msoffcrypto  # 用於處理加密的Office文檔
 import io
+from io import BytesIO
 import opencc  # 用於中文文字轉換和校正
 import tempfile
 from docx import Document  # 用於更精確地讀取Word文檔格式
@@ -205,6 +206,8 @@ class TextCorrectionTool:
             data = event.data
             file_path = str(data).strip()
             
+            print(f"原始拖放路徑: {file_path}")
+            
             # 處理可能的格式
             # Windows 可能會在路徑周圍添加大括號或引號
             if file_path.startswith('{') and file_path.endswith('}'):
@@ -218,29 +221,81 @@ class TextCorrectionTool:
             # 處理可能的檔案URL格式
             if file_path.startswith('file:///'):
                 file_path = file_path[8:].replace('/', '\\')
+            
+            # 處理 Mac 路徑格式或其他非標準路徑
+            if file_path.startswith('/Mac/') or '://' in file_path:
+                # 嘗試從路徑中提取實際的文件名
+                file_name = os.path.basename(file_path)
                 
-            print(f"拖放的檔案路徑: {file_path}")
+                # 顯示錯誤訊息
+                messagebox.showinfo("路徑格式不支援", 
+                                   f"檢測到非標準路徑格式: {file_path}\n\n"
+                                   f"請嘗試以下方法：\n"
+                                   f"1. 使用「檔案」選單中的「開啟」功能\n"
+                                   f"2. 從檔案總管直接拖放檔案\n"
+                                   f"3. 確保檔案位於本機上，而非網路位置")
+                return
+            
+            print(f"處理後的檔案路徑: {file_path}")
             
             # 檢查檔案是否存在
             if not os.path.exists(file_path):
-                raise FileNotFoundError(f"找不到檔案: {file_path}")
+                messagebox.showerror("錯誤", f"找不到檔案: {file_path}\n請確保檔案路徑正確且檔案存在。")
+                return
                 
             # 檢查檔案是否為Word檔案
             if not file_path.lower().endswith(('.doc', '.docx')):
-                raise ValueError(f"不支援的檔案格式: {file_path}")
+                messagebox.showerror("錯誤", f"不支援的檔案格式: {file_path}\n僅支援 .doc 和 .docx 格式。")
+                return
                 
-            # 處理Word檔案
-            text = self.process_word_file(file_path)
-            if text:
-                self.text_area.delete(1.0, tk.END)
-                self.text_area.insert(tk.END, text)
-                self.status_bar.config(text=f"已載入檔案: {os.path.basename(file_path)}")
+            # 更新狀態欄
+            self.status_bar.config(text=f"正在處理檔案: {os.path.basename(file_path)}")
+            
+            # 嘗試處理Word檔案
+            try:
+                # 先嘗試檢查文件是否加密
+                try:
+                    with open(file_path, 'rb') as f:
+                        try:
+                            office_file = msoffcrypto.OfficeFile(f)
+                            if office_file.is_encrypted():
+                                print("檔案已加密，需要密碼")
+                                # 文件已加密，直接調用密碼處理方法
+                                self.handle_password_protected_file(file_path)
+                                return
+                        except Exception as e:
+                            print(f"檢查加密狀態時發生錯誤: {str(e)}")
+                            # 繼續嘗試普通處理
+                except Exception as e:
+                    print(f"開啟檔案時發生錯誤: {str(e)}")
+                    # 繼續嘗試普通處理
                 
-                # 調整縮進
-                self.adjust_indentation()
+                # 嘗試不使用密碼處理
+                text = self.process_word_file(file_path)
                 
-                # 自動校正文字
-                self.correct_text()
+                # 如果成功處理，更新文字區域
+                if text:
+                    self.text_area.delete(1.0, tk.END)
+                    self.text_area.insert(tk.END, text)
+                    self.status_bar.config(text=f"已載入檔案: {os.path.basename(file_path)}")
+                    
+                    # 調整縮進
+                    self.adjust_indentation()
+                    
+                    # 自動校正文字
+                    self.correct_text()
+                
+            except Exception as e:
+                # 檢查是否為加密文件的錯誤
+                error_str = str(e).lower()
+                if self._is_password_error(error_str):
+                    # 可能是加密文件，嘗試使用密碼處理
+                    print(f"檢測到加密錯誤: {error_str}")
+                    self.handle_password_protected_file(file_path)
+                else:
+                    # 其他錯誤，顯示錯誤訊息
+                    messagebox.showerror("錯誤", f"處理檔案時發生錯誤: {str(e)}")
+                    self.status_bar.config(text=f"處理檔案時發生錯誤: {str(e)}")
                 
         except Exception as e:
             print(f"處理拖放檔案時發生錯誤: {str(e)}")
@@ -269,67 +324,155 @@ class TextCorrectionTool:
             # 更新狀態欄
             self.status_bar.config(text=f"正在處理檔案: {os.path.basename(file_path)}")
             
-            # 處理可能的加密文件
+            # 如果有密碼，嘗試解密
             if password:
-                # 如果有密碼，使用msoffcrypto處理
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-                temp_file.close()
-                
-                with open(file_path, 'rb') as f:
-                    file = msoffcrypto.OfficeFile(f)
-                    file.load_key(password=password)
-                    with open(temp_file.name, 'wb') as tf:
-                        file.decrypt(tf)
-                
-                # 使用解密後的臨時文件
-                doc_file = temp_file.name
+                try:
+                    with open(file_path, 'rb') as encrypted_file:
+                        # 使用 msoffcrypto 解密
+                        office_file = msoffcrypto.OfficeFile(encrypted_file)
+                        
+                        # 檢查文件是否加密
+                        if not office_file.is_encrypted():
+                            print("文件未加密，無需解密")
+                            # 如果文件未加密，直接處理
+                            return self._process_unencrypted_file(file_path)
+                        
+                        # 解密文件到內存
+                        decrypted_content = BytesIO()
+                        try:
+                            office_file.load_key(password=password)
+                            office_file.decrypt(decrypted_content)
+                        except Exception as e:
+                            print(f"解密失敗: {str(e)}")
+                            raise ValueError(f"解密失敗，密碼可能不正確: {str(e)}")
+                        
+                        # 重置指針到開始位置
+                        decrypted_content.seek(0)
+                        
+                        # 嘗試使用 python-docx 解析解密後的內容
+                        try:
+                            doc = Document(decrypted_content)
+                            text = self._extract_text_from_document(doc)
+                            return text
+                        except Exception as docx_e:
+                            print(f"使用 python-docx 解析失敗: {str(docx_e)}")
+                            
+                            # 如果 python-docx 失敗，嘗試使用臨時文件和 docx2txt
+                            try:
+                                # 創建臨時文件
+                                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+                                temp_file.close()
+                                
+                                # 將解密內容寫入臨時文件
+                                decrypted_content.seek(0)
+                                with open(temp_file.name, 'wb') as f:
+                                    f.write(decrypted_content.read())
+                                
+                                # 使用 docx2txt 處理
+                                try:
+                                    text = docx2txt.process(temp_file.name)
+                                    return text
+                                finally:
+                                    # 刪除臨時文件
+                                    if os.path.exists(temp_file.name):
+                                        os.unlink(temp_file.name)
+                            except Exception as temp_e:
+                                print(f"使用臨時文件處理失敗: {str(temp_e)}")
+                                raise ValueError(f"無法解析解密後的文件: {str(temp_e)}")
+                except Exception as e:
+                    print(f"處理加密文件時發生錯誤: {str(e)}")
+                    raise ValueError(f"處理加密文件時發生錯誤: {str(e)}")
             else:
-                doc_file = file_path
-            
-            # 使用python-docx讀取文檔
-            try:
-                doc = Document(doc_file)
-                
-                # 提取文本，保留段落格式
-                paragraphs = []
-                for para in doc.paragraphs:
-                    if para.text.strip():  # 忽略空段落
-                        paragraphs.append(para.text)
-                
-                # 提取表格內容
-                for table in doc.tables:
-                    for row in table.rows:
-                        row_text = []
-                        for cell in row.cells:
-                            if cell.text.strip():
-                                row_text.append(cell.text.strip())
-                        if row_text:
-                            paragraphs.append('\t'.join(row_text))
-                
-                # 使用兩個換行符連接段落，保留格式
-                text = '\n\n'.join(paragraphs)
-                
-                # 如果使用了臨時文件，刪除它
-                if password:
-                    os.unlink(temp_file.name)
-                
-                return text
-                
-            except Exception as e:
-                # 如果python-docx失敗，回退到docx2txt
-                print(f"使用python-docx讀取失敗，嘗試使用docx2txt: {str(e)}")
-                text = docx2txt.process(doc_file)
-                
-                # 如果使用了臨時文件，刪除它
-                if password:
-                    os.unlink(temp_file.name)
-                
-                return text
+                # 處理未加密文件
+                return self._process_unencrypted_file(file_path)
                 
         except Exception as e:
+            print(f"處理檔案時發生錯誤: {str(e)}")
             self.status_bar.config(text=f"處理檔案時發生錯誤: {str(e)}")
-            messagebox.showerror("錯誤", f"處理檔案時發生錯誤: {str(e)}")
-            return ""
+            
+            # 檢查是否為加密錯誤
+            if password is None and self._is_password_error(str(e)):
+                raise Exception(f"檔案可能有密碼保護: {str(e)}")
+            
+            raise e
+    
+    def _process_unencrypted_file(self, file_path):
+        """處理未加密的Word檔案
+        
+        參數:
+            file_path: Word檔案路徑
+            
+        回傳:
+            檔案內容
+        """
+        # 先嘗試使用 docx2txt
+        try:
+            text = docx2txt.process(file_path)
+            if text:
+                return text
+        except Exception as e:
+            print(f"使用 docx2txt 處理失敗: {str(e)}")
+            
+            # 如果是加密錯誤，直接拋出
+            if self._is_password_error(str(e)):
+                raise Exception(f"檔案可能有密碼保護: {str(e)}")
+        
+        # 如果 docx2txt 失敗，嘗試使用 python-docx
+        try:
+            doc = Document(file_path)
+            text = self._extract_text_from_document(doc)
+            if text:
+                return text
+        except Exception as docx_e:
+            print(f"使用 python-docx 處理失敗: {str(docx_e)}")
+            
+            # 如果是加密錯誤，直接拋出
+            if self._is_password_error(str(docx_e)):
+                raise Exception(f"檔案可能有密碼保護: {str(docx_e)}")
+            
+            # 如果兩種方法都失敗，則拋出異常
+            raise Exception(f"無法讀取文件: {str(docx_e)}")
+    
+    def _is_password_error(self, error_message):
+        """檢查錯誤訊息是否與密碼保護相關
+        
+        參數:
+            error_message: 錯誤訊息
+            
+        回傳:
+            是否為密碼相關錯誤
+        """
+        error_message = error_message.lower()
+        password_keywords = ["password", "encrypted", "保護", "密碼", "加密"]
+        return any(keyword in error_message for keyword in password_keywords)
+    
+    def _extract_text_from_document(self, doc):
+        """從 python-docx Document 物件中提取文字
+        
+        參數:
+            doc: python-docx Document 物件
+            
+        回傳:
+            提取的文字
+        """
+        # 提取文本，保留段落格式
+        paragraphs = []
+        for para in doc.paragraphs:
+            if para.text.strip():  # 忽略空段落
+                paragraphs.append(para.text)
+        
+        # 提取表格內容
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    if cell.text.strip():
+                        row_text.append(cell.text.strip())
+                if row_text:
+                    paragraphs.append('\t'.join(row_text))
+        
+        # 使用兩個換行符連接段落，保留格式
+        return '\n\n'.join(paragraphs)
     
     def handle_password_protected_file(self, file_path):
         """處理有密碼保護的Word檔案
@@ -338,7 +481,7 @@ class TextCorrectionTool:
             file_path: 加密Word檔案的路徑
         """
         # 處理有密碼保護的檔案
-        password = simpledialog.askstring("密碼保護", "該檔案有密碼保護，請輸入密碼:", show='*')
+        password = self.ask_password()
         if password:
             try:
                 # 使用密碼解密檔案
@@ -353,8 +496,68 @@ class TextCorrectionTool:
                 # 自動校正文字
                 self.correct_text()
             except Exception as e:
-                self.status_bar.config(text="密碼錯誤或無法解密檔案")
-                messagebox.showerror("解密錯誤", f"無法解密檔案: {str(e)}")
+                messagebox.showerror("錯誤", f"解密失敗，密碼可能不正確: {str(e)}")
+                self.status_bar.config(text=f"解密失敗: {os.path.basename(file_path)}")
+    
+    def ask_password(self):
+        """顯示密碼輸入對話框
+        
+        回傳:
+            使用者輸入的密碼
+        """
+        # 創建密碼輸入對話框
+        password_window = tk.Toplevel(self.root)
+        password_window.title("密碼保護")
+        password_window.geometry("300x150")
+        password_window.resizable(False, False)
+        
+        # 設置模態對話框
+        password_window.transient(self.root)
+        password_window.grab_set()
+        
+        # 居中顯示
+        window_width = 300
+        window_height = 150
+        screen_width = password_window.winfo_screenwidth()
+        screen_height = password_window.winfo_screenheight()
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        password_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        
+        # 添加說明標籤
+        tk.Label(password_window, text="該檔案有密碼保護，請輸入密碼:", font=("Arial", 10)).pack(pady=10)
+        
+        # 密碼輸入框
+        password_entry = tk.Entry(password_window, show="*", width=25)
+        password_entry.pack(pady=5)
+        password_entry.focus_set()  # 設置焦點
+        
+        password = None
+        
+        # 確定按鈕回調函數
+        def on_ok():
+            nonlocal password
+            password = password_entry.get()
+            password_window.destroy()
+        
+        # 取消按鈕回調函數
+        def on_cancel():
+            password_window.destroy()
+        
+        # 按鈕區域
+        button_frame = tk.Frame(password_window)
+        button_frame.pack(pady=10)
+        
+        tk.Button(button_frame, text="確定", command=on_ok, width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="取消", command=on_cancel, width=10).pack(side=tk.LEFT, padx=5)
+        
+        # 綁定回車鍵
+        password_window.bind("<Return>", lambda event: on_ok())
+        password_window.bind("<Escape>", lambda event: on_cancel())
+        
+        # 等待視窗關閉
+        password_window.wait_window()
+        return password
     
     def open_file(self):
         """開啟檔案對話框"""
