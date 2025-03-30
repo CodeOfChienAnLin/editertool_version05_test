@@ -1,14 +1,15 @@
 import os
+import sys
 import json
 import tkinter as tk
-from tkinter import messagebox, filedialog, simpledialog
+from tkinter import ttk, filedialog, messagebox
 import threading
-from tkinter import ttk
 import docx2txt  # 用於讀取Word文檔
 import msoffcrypto  # 用於處理加密的Office文檔
 import io
 import opencc  # 用於中文文字轉換和校正
 import tempfile
+from docx import Document  # 用於更精確地讀取Word文檔格式
 
 class TextCorrectionTool:
     """文字校正工具主類別"""
@@ -67,30 +68,25 @@ class TextCorrectionTool:
         
         # 文字處理區域框架 (700x500)
         text_frame = tk.Frame(self.root, width=700, height=500)
-        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        text_frame.pack_propagate(False)  # 防止框架自動調整大小
-        
-        # 文字處理區域 - 用於顯示和編輯文字
-        self.text_area = tk.Text(text_frame, wrap=tk.WORD, 
-                               font=(self.settings["font_family"], self.settings["font_size"]))
-        self.text_area.pack(fill=tk.BOTH, expand=True)
+        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # 添加垂直滾動條
-        y_scrollbar = tk.Scrollbar(self.text_area, orient=tk.VERTICAL)
+        y_scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL)
         y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.text_area.config(yscrollcommand=y_scrollbar.set)
-        y_scrollbar.config(command=self.text_area.yview)
         
-        # 添加水平滾動條
-        x_scrollbar = tk.Scrollbar(text_frame, orient=tk.HORIZONTAL)
-        x_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
-        self.text_area.config(xscrollcommand=x_scrollbar.set)
-        x_scrollbar.config(command=self.text_area.xview)
+        # 文字處理區域 - 用於顯示和編輯文字
+        self.text_area = tk.Text(text_frame, 
+                               font=(self.settings["font_family"], self.settings["font_size"]),
+                               wrap=tk.WORD,  # 啟用自動換行
+                               yscrollcommand=y_scrollbar.set)
+        self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # 設置滾動條的命令
+        y_scrollbar.config(command=self.text_area.yview)
         
         # 圖片顯示區域 (900x100)
         image_frame = tk.Frame(self.root, width=900, height=100, bg="lightgrey")
-        image_frame.pack(side=tk.BOTTOM, fill=tk.BOTH)
-        image_frame.pack_propagate(False)  # 防止框架自動調整大小
+        image_frame.pack(side=tk.BOTTOM, fill=tk.X)
         
         # 添加標籤到圖片區域
         self.image_label = tk.Label(image_frame, text="圖片顯示區域", bg="lightgrey")
@@ -264,33 +260,62 @@ class TextCorrectionTool:
             # 更新狀態欄
             self.status_bar.config(text=f"正在處理檔案: {os.path.basename(file_path)}")
             
-            # 嘗試使用docx2txt直接讀取
+            # 處理可能的加密文件
+            if password:
+                # 如果有密碼，使用msoffcrypto處理
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+                temp_file.close()
+                
+                with open(file_path, 'rb') as f:
+                    file = msoffcrypto.OfficeFile(f)
+                    file.load_key(password=password)
+                    with open(temp_file.name, 'wb') as tf:
+                        file.decrypt(tf)
+                
+                # 使用解密後的臨時文件
+                doc_file = temp_file.name
+            else:
+                doc_file = file_path
+            
+            # 使用python-docx讀取文檔
             try:
-                # 如果沒有密碼，直接使用docx2txt讀取
-                if not password:
-                    text = docx2txt.process(file_path)
-                    return text
-                else:
-                    # 如果有密碼，使用msoffcrypto處理
-                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-                    temp_file.close()
-                    
-                    with open(file_path, 'rb') as f:
-                        file = msoffcrypto.OfficeFile(f)
-                        file.load_key(password=password)
-                        with open(temp_file.name, 'wb') as tf:
-                            file.decrypt(tf)
-                    
-                    # 從解密後的臨時檔案讀取內容
-                    text = docx2txt.process(temp_file.name)
-                    
-                    # 刪除臨時檔案
+                doc = Document(doc_file)
+                
+                # 提取文本，保留段落格式
+                paragraphs = []
+                for para in doc.paragraphs:
+                    if para.text.strip():  # 忽略空段落
+                        paragraphs.append(para.text)
+                
+                # 提取表格內容
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = []
+                        for cell in row.cells:
+                            if cell.text.strip():
+                                row_text.append(cell.text.strip())
+                        if row_text:
+                            paragraphs.append('\t'.join(row_text))
+                
+                # 使用兩個換行符連接段落，保留格式
+                text = '\n\n'.join(paragraphs)
+                
+                # 如果使用了臨時文件，刪除它
+                if password:
                     os.unlink(temp_file.name)
-                    
-                    return text
+                
+                return text
+                
             except Exception as e:
-                # 如果docx2txt失敗，嘗試使用其他方法
-                raise e
+                # 如果python-docx失敗，回退到docx2txt
+                print(f"使用python-docx讀取失敗，嘗試使用docx2txt: {str(e)}")
+                text = docx2txt.process(doc_file)
+                
+                # 如果使用了臨時文件，刪除它
+                if password:
+                    os.unlink(temp_file.name)
+                
+                return text
                 
         except Exception as e:
             self.status_bar.config(text=f"處理檔案時發生錯誤: {str(e)}")
